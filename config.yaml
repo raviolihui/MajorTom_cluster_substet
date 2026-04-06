@@ -1,0 +1,67 @@
+# ============================================================
+# Make_MajorTom_sbst – Subset Selection Pipeline Configuration
+# ============================================================
+#
+# Pipeline overview:
+#   Step 1  │ Feature Extraction –  run DINOv3-ViT-S/16
+#           │                     over each tile (RGB patch) on the whole dataset, 
+#           │                     store CLS-token embeddings to disk.
+#   Step 2 │ k-Means Balancing  – cluster the embeddings into N_CLUSTERS
+#           │                     clusters, sample TILES_PER_CLUSTER tiles
+#           │                     equally from each cluster, extrapolate back
+#           │                     to the full dataset to reach TARGET_SIZE_TB.
+
+# ------------------------------------------------------------------
+# Paths
+# ------------------------------------------------------------------
+data:
+  images_dir: /data/databases/Core-S2L2A/images   # input parquet files
+  output_dir: /data/databases/MajorTom5T/outputs_filtered
+
+# ------------------------------------------------------------------
+# Step 1 – Feature Extraction
+# ------------------------------------------------------------------
+feature_extraction:
+  # Embed ALL cloud-filtered tiles (sample_fraction=1.0 means no sub-sampling).
+  # This is required for exact cluster assignment in Step 3.
+  # ~4.49 M tiles at ~300 img/s on one A100 ≈ 4 h (ViT-L) or ~1 h (ViT-S).
+  sample_fraction: 1.0
+  # Random seed (kept for reproducibility of any future sub-sampling)
+  seed: 42
+  # DINOv3 model – ViT-L/16 (1024-D CLS token, best semantic quality)
+  model_arch: vitl16            # vits16 (384-D, fast) | vitl16 (1024-D, best)
+  # Path to local .pth weights file (avoids download)
+  weights_path: /home/carmenoliver/my_projects/dinov3/dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth
+  # Bands to use as RGB input to the 3-channel ViT
+  # B04=red (idx 3), B03=green (idx 2), B02=blue (idx 1) in band_names order
+  rgb_band_indices: [3, 2, 1]
+  # Spatial crop size sent to ViT (bicubic interpolation after loading full tile)
+  crop_size: 224
+  # Inference batch size (reduce to 32 if GPU OOM with ViT-L)
+  batch_size: 64
+  num_workers: 8
+  device: cuda                  # cuda | cpu
+  # Output file
+  embeddings_file: embeddings_filtered.npz   # stores 'embeddings', 'indices'
+
+# ------------------------------------------------------------------
+# Step 2 – k-Means Balancing
+# ------------------------------------------------------------------
+kmeans:
+  clustering_method: birch-threshold-only                # kmeans | birch (faster, less memory, good for large datasets)
+  birch_threshold: 1            # start value (lower → more subclusters)
+  # birch_threshold_decay: 0.5                # shrink multiplier
+  # birch_threshold_attempts: 10              # how many retries before giving up
+  # # Equal number of clusters as the target images.
+  # n_clusters: 978260
+  # # Maximum k-means iterations
+  max_iter: 300
+  # PCA dimensionality reduction before k-means (1024-D → 128-D for ViT-L)
+  pca_components: 280
+  seed: 42
+  # Target subset size: 5 TB compressed (based on 23TB / 4.49M tiles)
+  target_n_tiles: 978260
+  # Balanced sampling: tiles per cluster = 182,758 // 182,758 = 1
+  # (remainder of 0) #we should have 978260 images at the end
+  # Output file: the final subset manifest 
+  subset_manifest_file: subset_filtered.parquet

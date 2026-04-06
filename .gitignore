@@ -1,0 +1,7 @@
+envr 
+logs/
+
+# Ignore large output files
+*.csv
+*.parquet
+*.pth
