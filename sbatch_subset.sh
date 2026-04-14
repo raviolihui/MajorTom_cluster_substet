@@ -8,7 +8,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:1
 #SBATCH --mem=32G
-#SBATCH --time=24:00:00
+#SBATCH --time=50:00:00
 # Adjust partition / account / qos to your cluster
 
 
@@ -31,8 +31,7 @@ mkdir -p logs
 #   python run_pipeline.py --config config.yaml --steps 2
 
 echo "Starting pipeline at $(date)"
-python scripts/extract_subset_rows.py --manifest /data/databases/MajorTom5T/outputs_filtered/subset_manifest_faiss.parquet --dest_dir /data/databases/MajorTom5T/outputs_filtered/images --workers 8
-#python run_pipeline.py --config config.yaml --steps 2
+python run_pipeline.py --config config.yaml --steps 1,2
 STATUS=$?
 
 echo "Pipeline finished at $(date) with exit code $STATUS"

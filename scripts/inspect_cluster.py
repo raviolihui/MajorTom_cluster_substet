@@ -9,12 +9,12 @@ import io
 import matplotlib.pyplot as plt
 
 # Target specific cluster
-TARGET_CLUSTERS = [1822, 3138, 4137, 85976] #[1822, 3138, 4137, 85976] #[132, 1822, 3138, 6576, 11328, 20386, 34883, 39753, 44900, 46970]
+TARGET_CLUSTERS =  [845, 2463, 13507] #[1822, 3138, 4137, 85976] #[132, 1822, 3138, 6576, 11328, 20386, 34883, 39753, 44900, 46970]
 
 # Configuration
-embeddings_path = "/data/databases/MajorTom5T/outputs_filtered/embeddings_filtered.npz"
-centroids_path = "/data/databases/MajorTom5T/outputs_filtered/centroids_faiss.npz"
-meta_path = "/data/databases/MajorTom5T/outputs_filtered/full_dataset_manifest.parquet"
+embeddings_path = "/data/databases/MajorTom5T/Core-S2L2A-subset/extras/embeddings_filtered.npz"
+centroids_path = "/data/databases/MajorTom5T/Core-S2L2A-subset/extras/centroids_faiss.npz"
+meta_path = "/data/databases/MajorTom5T/Core-S2L2A-subset/extras/full_dataset_manifest.parquet"
 base_dir = "/data/databases/Core-S2L2A"
 
 print(f"Loading embeddings and metadata to find clusters {TARGET_CLUSTERS}...")
@@ -36,6 +36,7 @@ print("Normalizing embeddings and assigning clusters using FAISS...")
 X = normalize(embeddings, norm="l2")
 centroids_data = np.load(centroids_path)
 centroids = centroids_data["centroids"].astype(np.float32)
+centroids = normalize(centroids, norm="l2")
 
 index_cpu = faiss.IndexFlatL2(X.shape[1])
 try:

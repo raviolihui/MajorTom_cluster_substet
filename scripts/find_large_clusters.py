@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 
 def main():
     parser = argparse.ArgumentParser(description="Find clusters with more than a specified number of points.")
-    parser.add_argument("--stats_csv", type=str, default="/data/databases/MajorTom5T/outputs/faiss_kmeans_stats.csv",
+    parser.add_argument("--stats_csv", type=str, default="/data/databases/MajorTom5T/outputs_filtered/faiss_kmeans_stats.csv",
                         help="Path to the faiss_kmeans_stats.csv file")
     parser.add_argument("--min_points", type=int, default=99,
                         help="Minimum number of points in the cluster")

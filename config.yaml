@@ -26,6 +26,7 @@ feature_extraction:
   # This is required for exact cluster assignment in Step 3.
   # ~4.49 M tiles at ~300 img/s on one A100 ≈ 4 h (ViT-L) or ~1 h (ViT-S).
   sample_fraction: 1.0
+  nodata_threshold: 0.45    # fraction in [0,1]; tiles with nodata > this will be dropped
   # Random seed (kept for reproducibility of any future sub-sampling)
   seed: 42
   # DINOv3 model – ViT-L/16 (1024-D CLS token, best semantic quality)

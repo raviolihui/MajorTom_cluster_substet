@@ -2,27 +2,28 @@
 
 Creates a semantically balanced **~5 TB** subset of the
 [Major-TOM Core-S2L2A](https://huggingface.co/datasets/Major-TOM/Core-S2L2A)
-dataset (full dataset: ~23 TB parquet / 4 491 772 tiles / >2.56 T pixels).
+dataset (full dataset: ~23 TB parquet /2,245,886 tiles).
 
 ---
 
 ## Pipeline overview
 
 ```
-/data/databases/Core-S2L2A/images/*.parquet   (~4 492 files, ~4.49 M tiles)
+/data/databases/Core-S2L2A/images/*.parquet   (~4 492 files, ~2.24 M tiles)
          ▼ Step 1 – Feature Extraction
+         |  Filter all tiles to keep only data with <45% zeros, divide by 10000 and clamp to [0,1] then       normalize with their band statistics to follow what DINOv3 expects. 
+         |. Make a new metadata file to record the new filtered index
          │  Embed ALL tiles with DINOv3-ViT-L/16 (RGB, bicubic downscaling to 224×224).
          │  No sub-sampling — every tile gets an exact semantic fingerprint.
          │  Save CLS-token embeddings (dim = 1024).
-         │  ~4.49 M tiles @ ~80 img/s on 1 GPU ≈ 15–16 h (ViT-L).
-         │  ▶  outputs/embeddings.npz
-         │
-         ▼ Step 2 – k-Means Balancing
-            PCA: 1024-D → 250-D (>90% explained variance).
-            k-Means: Same number of clusters as images we want to keep: 978260. Number decided due to target subset size: 5 TB compressed (23TB / 4.49M tiles)
-            ▶  outputs/subset_manifest.parquet
-            ▶  outputs/kmeans_stats.csv
-When `kmeans.clustering_method: birch` is set, Birch builds tuned leaf clusters and balanced sampling picks tiles per subcluster; the centroids are saved to `outputs/centroids.npz` so you can inspect or reuse the semantic anchors.
+         │  ~2.23 M tiles @ ~80 img/s on 1 GPU ≈ 15–16 h (ViT-L).
+         │  ▶  Core-S2L2a-subset/embeddings.npz
+         │  ▶. Core-S2L2a-subset/full_dataset_manifest.parquet
+         ▼ Step 2 – FAISS k-Means 
+            k-Means: Same number of clusters as images we want to keep: 450000. Number decided due to target subset size: 4.3 TB (23TB / 2.24M tiles)
+            ▶  Core-S2L2a-subset/manifest.parquet
+            ▶  Core-S2L2a-subset/kmeans_faiss_stats.csv
+
 ```
 
 ---
@@ -32,15 +33,18 @@ When `kmeans.clustering_method: birch` is set, Birch builds tuned leaf clusters 
 ```
 Make_MajorTom_sbst/
 ├── config.yaml                 ← all knobs / paths in one place
-├── run_pipeline.py             ← master orchestrator (run this)
+├── run_pipeline.py             ← master orchestrator
 ├── step1_extract_features.py   ← Step 1: DINOv3-ViT-L/16 feature extraction
-├── step2_kmeans_balance.py     ← Step 2: k-means balanced sampling
+├── step2_kmeans_faiss.py       ← Step 2: FAISS k-Means clustering and sampling
 ├── sbatch_subset.sh            ← SLURM launcher
-└── outputs/                    ← created automatically
-    ├── embeddings.npz
-    ├── subset_manifest.parquet
-    ├── kmeans_stats.csv
-    └── centroids.npz           ← produced only when `kmeans.clustering_method: birch` (centroid embeddings + counts)
+├── inspect_cluster.py          ← Peek at images inside specific semantic clusters
+├── find_large_clusters.py      ← Compute size distributions / histograms of clusters
+└── /data/databases/MajorTom5T/Core-S2L2A-subset/  ← output directory (example)
+    ├── embeddings_filtered.npz
+    ├── full_dataset_manifest.parquet
+    ├── subset_manifest_faiss.parquet
+    ├── centroids_faiss.npz
+    └── faiss_kmeans_stats.csv
 ```
 
 ---
@@ -48,11 +52,11 @@ Make_MajorTom_sbst/
 ## Quick start
 
 ```bash
-conda activate envr
+conda activate envr #(create your own)
 cd /home/carmenoliver/my_projects/Make_MajorTom_sbst
 
 # Full pipeline
-python run_pipeline.py
+python run_pipeline.py --config config.yaml
 
 # Or via SLURM
 sbatch sbatch_subset.sh
@@ -64,81 +68,50 @@ sbatch sbatch_subset.sh
 
 | Key | Value | Description |
 |-----|-------|-------------|
-| `feature_extraction.sample_fraction` | `1.0` | Embed **all** tiles (no sub-sampling) |
-| `feature_extraction.model_arch` | `vitl16` | ViT-L/16 SAT (1024-D, best semantic quality) |
-| `feature_extraction.weights_path` | local `.pth` | Pre-trained DINOv3 weights |
-| `feature_extraction.batch_size` | `64` | Inference batch size |
-| `kmeans.n_clusters` | `978260` | Number of semantic clusters |
-| `kmeans.clustering_method` | `kmeans` | `kmeans` (default), `birch` (tuning threshold until target count), or `birch-threshold-only` (fixed threshold, natural cluster count) |
-| `kmeans.birch_threshold` | `0.3` | Distance threshold fed to Birch. Lower values → smaller subcluster radius and more subclusters. Used by both `birch` and `birch-threshold-only` modes. |
-| `kmeans.birch_threshold_decay` | `0.5` | Reduce factor applied when Birch returns too few subclusters. |
-| `kmeans.birch_threshold_attempts` | `8` | Maximum retries before accepting the current threshold. |
-| `kmeans.birch_min_threshold` | `1e-6` | Threshold floor; Birch will stop shrinking below this even if the target cluster count isn’t reached. |
-
-## Clustering modes
-
-### `kmeans` (default)
-MiniBatchKMeans with fixed `n_clusters`. Fast, reliable, scales well.
-
-### `birch` 
-Birch with **adaptive threshold tuning** that shrinks the distance threshold until it reaches `target_n_tiles` clusters (or hits the attempt/threshold floor). Good for semantic hierarchies but can be slow if threshold tuning takes many passes.
-
-### `birch-threshold-only` (recommended for centroid-only datasets)
-Birch with a **fixed threshold** (`birch_threshold`), producing **centroids only** (no additional tile selection).
-
-**Key difference:** Instead of clustering tiles and then sampling a balanced subset of tiles from each cluster, this mode:
-1. Runs Birch with the fixed threshold
-2. Computes the centroid embedding for each subcluster
-3. **Uses only these centroids as the final dataset** (no tile selection)
-4. Saves centroids to `outputs/centroids.npz` (centroid embeddings + cluster sizes)
-
-This is useful when you want a small, semantically diverse dataset of **representative embeddings** rather than actual satellite imagery tiles. The output manifest will contain only cluster IDs (not tile references).
-
-**Example:** Set `kmeans.clustering_method: birch-threshold-only` and `kmeans.birch_threshold: 0.3` to get ~1000 semantic centroids representing the full dataset's diversity.
-
-
-Use `visualize_embeddings.py` to peek at the Step 1 CLS embeddings in 3D. The script runs a PCA to four dimensions, plots the first three axes in a 3D scatter, and colors points by their fourth component.
-
-```sh
-cd /home/carmenoliver/my_projects/Make_MajorTom_sbst
-python visualize_embeddings.py --embeddings outputs/embeddings.npz --max-samples 50000 --output outputs/embeddings_pca3d.png
-```
-
-Adjust `--max-samples` and `--seed` for reproducibility; the script saves a PNG so you can share or open it locally.
+| `feature_extraction.nodata_threshold`| `0.45` | Drops tiles with > 45% zero/nodata values. |
+| `feature_extraction.sample_fraction` | `1.0` | Embed **all** valid tiles (no sub-sampling). |
+| `feature_extraction.model_arch` | `vitl16` | ViT-L/16 (1024-D, best semantic quality). |
+| `feature_extraction.weights_path` | local `.pth` | Pre-trained DINOv3 weights. |
+| `feature_extraction.batch_size` | `64` | Inference batch size. |
+| `kmeans.clustering_method` | `faiss` | Scalable k-Means using FAISS on GPU/CPU. |
+| `kmeans.n_clusters` | `450000` | Number of semantic clusters (equal to target subset size). |
+| `kmeans.max_iter` | `300` | Maximum FAISS k-Means iterations. |
 
 ---
 
-## Output: `subset_manifest.parquet`
+## Output: `subset_manifest_faiss.parquet`
 
-Each row identifies a tile to include in the training set:
+Each row identifies a tile to include in the training set. Since we want 450,000 images and request 450,000 clusters, the script extracts one representative tile (usually closest to the centroid) per cluster.
 
 | Column | Description |
 |--------|-------------|
-| `product_id` | Sentinel-2 product identifier |
-| `grid_cell` | Major-TOM grid cell (e.g. `10S_DG`) |
-| `parquet_file` | Absolute path to the source parquet shard |
+| `grid_cell` | Major-TOM grid cell |
+| `parquet_url` / `parquet_file`| Path to the source parquet shard |
+| `parquet_row` | Absolute row index within the source parquet |
 | `row_group` | Row-group index within the parquet file |
 | `row_in_rg` | Row index within the row group |
-| `cloud_fraction` | Measured cloud fraction (≤ 0.10) |
-| `cluster_id` | k-Means cluster assignment (0 – 978260) |
+| `cluster_id` | FAISS k-Means cluster assignment (0 to 449,999) |
+| `distance_to_centroid` | L2 distance from this tile's embedding to its cluster centroid |
 
 ---
 
-## Output: `centroids.npz` (Birch mode)
+## Tooling scripts
 
-Generated only when `kmeans.clustering_method` is `birch`, this compressed NumPy archive contains the tuned centroids that we use during balanced sampling.
+### Checking Cluster Distribution
+```bash
+python find_large_clusters.py --stats_csv /data/databases/MajorTom5T/Core-S2L2A-subset/extras/faiss_kmeans_stats.csv
+```
+Generates a histogram and line plot (`cluster_distribution_plot.png`) of how many images ended up in each cluster.
 
-| Array | Shape | Description |
-|-------|-------|-------------|
-| `centroids` | `(n_clusters, D)` | Mean embedding of each Birch leaf cluster after threshold tuning. |
-| `counts` | `(n_clusters,)` | Number of tiles assigned to each cluster. |
-
-You can reuse the centroids for semantic analysis or as references for selecting representative tiles without needing the full subset manifest.
+### Inspecting Specific Clusters
+```bash
+python inspect_cluster.py
+```
+Edit `TARGET_CLUSTERS` inside this script to pull the actual image patches matching the exact semantic clusters. It normalizes embeddings and uses FAISS to find the closest parquet items, then reconstructs the RGB images into a PNG grid.
 
 ## Size maths
 
 ```
-23TB -- 4.5M img
-5T   -- 978260 img
-
+23TB -- 2.24M img
+4.3TB -- 450,000 img
 ```
