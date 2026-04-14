@@ -6,6 +6,9 @@ dataset (full dataset: ~23 TB parquet /2,245,886 tiles).
 
 ---
 
+ <img width="2896" height="1574" alt="image" src="https://github.com/user-attachments/assets/75a6b4a2-786a-4fe1-b35a-019554c21021" />
+
+
 ## Pipeline overview
 
 ```
